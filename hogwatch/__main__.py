@@ -4,6 +4,7 @@
     python -m hogwatch eero-login           connect to the eero (one time)
     python -m hogwatch eero-check           show what the eero reports right now
     python -m hogwatch selftest             15-second check that everything works
+    python -m hogwatch send-report          email the last 24 hours now (--preview: save it as HTML instead)
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ def cmd_run(args) -> int:
     """Start everything and serve the dashboard until stopped."""
     from .collector import Collector
     from .db import DB
+    from .report import EmailSettings, Reporter
     from .web import make_server
 
     _setup_logging()
@@ -54,8 +56,9 @@ def cmd_run(args) -> int:
     done = threading.Event()
     collector_ref: dict = {}
     db_ref: dict = {}
+    reporter_ref: dict = {}
     try:
-        server = make_server(cfg["port"], collector_ref, db_ref, on_shutdown=done.set)
+        server = make_server(cfg["port"], collector_ref, db_ref, on_shutdown=done.set, reporter_ref=reporter_ref)
     except OSError:
         log.info("HogWatch is already running -- opening the dashboard")
         if not args.no_browser:
@@ -70,6 +73,10 @@ def cmd_run(args) -> int:
     collector = Collector(cfg, db)
     collector.start()
     collector_ref["c"] = collector
+    # Daily email report (does nothing until an address and app password are saved).
+    reporter = Reporter(db, EmailSettings(DATA_DIR / "email.json"), stopping=done)
+    reporter_ref["r"] = reporter
+    threading.Thread(target=reporter.loop, name="report", daemon=True).start()
     if not args.no_browser:
         webbrowser.open(url)
     try:
@@ -194,6 +201,28 @@ def cmd_selftest(args) -> int:
     return 0
 
 
+def cmd_send_report(args) -> int:
+    """Email a report of the last N hours now, or (--preview) save it as an HTML file without sending."""
+    from .db import DB
+    from .report import EmailSettings, Reporter, build_report
+
+    db = DB(DATA_DIR / "hogwatch.db")
+    if args.preview:
+        now = time.time()
+        rep = build_report(db, now - args.hours * 3600, now)
+        out = DATA_DIR / "report_preview.html"
+        out.write_text(f"<!doctype html><meta charset=utf-8><title>{rep['subject']}</title>{rep['html']}",
+                       encoding="utf-8")
+        print(f"Subject: {rep['subject']}\n\n{rep['text']}\nHTML version saved to {out}")
+        return 0
+    result = Reporter(db, EmailSettings(DATA_DIR / "email.json"), threading.Event()).send(daily=False, hours=args.hours)
+    if result["ok"]:
+        print(f"Sent to {', '.join(result['to'])}: {result['subject']}")
+        return 0
+    print(f"Not sent: {result['error']}")
+    return 1
+
+
 def main() -> int:
     """Parse the command and run it."""
     p = argparse.ArgumentParser(prog="hogwatch", description="Find out who is slowing the internet down.")
@@ -204,12 +233,15 @@ def main() -> int:
     sub.add_parser("eero-check", help="show what the eero reports right now")
     st = sub.add_parser("selftest", help="15-second check that everything works")
     st.add_argument("--seconds", type=int, default=15)
+    sr = sub.add_parser("send-report", help="email the recent slowdowns and dropouts now")
+    sr.add_argument("--hours", type=float, default=24, help="how far back to cover (default 24)")
+    sr.add_argument("--preview", action="store_true", help="save the report as HTML instead of sending")
     args = p.parse_args()
     if args.cmd is None:
         args = p.parse_args(["run"])
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     return {"run": cmd_run, "eero-login": cmd_eero_login, "eero-check": cmd_eero_check,
-            "selftest": cmd_selftest}[args.cmd](args)
+            "selftest": cmd_selftest, "send-report": cmd_send_report}[args.cmd](args)
 
 
 if __name__ == "__main__":

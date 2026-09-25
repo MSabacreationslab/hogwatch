@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .report import ReportError, build_report
+
 log = logging.getLogger(__name__)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -143,10 +145,27 @@ def incidents(db, days: float, limit: int) -> list[dict]:
     return rows
 
 
-def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown) -> ThreadingHTTPServer:
+def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown,
+                reporter_ref: dict | None = None) -> ThreadingHTTPServer:
     """Create (bind) the server. Binding first doubles as the 'already running?' check."""
+    reporter_ref = reporter_ref if reporter_ref is not None else {}
+    # Only answer requests addressed to this machine by name. A web page elsewhere can
+    # point its own domain at 127.0.0.1 ("DNS rebinding") and then read this dashboard
+    # as if it were its own site; checking the Host header stops that. It matters more
+    # now that the dashboard holds email settings.
+    allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    last_manual_send = [0.0]
 
     class Handler(BaseHTTPRequestHandler):
+        def _host_ok(self) -> bool:
+            return (self.headers.get("Host") or "").lower() in allowed_hosts
+
+        def _body(self) -> dict:
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > 16384:
+                raise ValueError("request too large")
+            return json.loads(self.rfile.read(n) or b"{}") if n else {}
+
         def _send(self, code: int, body: bytes, ctype: str) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -160,10 +179,21 @@ def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown) -> Th
 
         def do_GET(self):  # noqa: N802 (http.server naming)
             """Static files and read-only API."""
+            if not self._host_ok():
+                return self._send(403, b"forbidden", "text/plain")
             url = urlparse(self.path)
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
-            col, db = collector_ref.get("c"), db_ref.get("db")
+            col, db, rep = collector_ref.get("c"), db_ref.get("db"), reporter_ref.get("r")
             try:
+                if url.path == "/api/email":
+                    # Settings never include the password itself, only whether one is saved.
+                    return self._json({"settings": rep.settings.load(), "status": rep.status()} if rep
+                                      else {"error": "starting"})
+                if url.path == "/api/email/preview":
+                    now = time.time()
+                    body = build_report(db, now - min(float(q.get("hours", 24)), 24 * 7) * 3600, now)["html"]
+                    page = f"<!doctype html><meta charset=utf-8><title>HogWatch report preview</title><body style=\"margin:24px\">{body}"
+                    return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
                 if url.path == "/api/now":
                     return self._json(col.snapshot() if col else {"status": "starting"})
                 if url.path == "/api/timeline":
@@ -184,13 +214,33 @@ def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown) -> Th
             self._send(404, b"not found", "text/plain")
 
         def do_POST(self):  # noqa: N802
-            """Only /api/shutdown. The custom header can't be sent cross-site without a CORS
-            preflight (which we never approve), so a random web page can't stop the monitor."""
-            if urlparse(self.path).path == "/api/shutdown" and self.headers.get("X-HogWatch") == "1":
+            """Shutdown and email actions. Every POST needs the X-HogWatch header: browsers
+            can't send a custom header cross-site without a CORS preflight (which we never
+            approve), so another web page can't change settings or trigger emails."""
+            path = urlparse(self.path).path
+            if not self._host_ok() or self.headers.get("X-HogWatch") != "1":
+                return self._send(403, b"forbidden", "text/plain")
+            if path == "/api/shutdown":
                 self._json({"ok": True})
                 threading.Thread(target=on_shutdown, daemon=True).start()
                 return
-            self._send(403, b"forbidden", "text/plain")
+            rep = reporter_ref.get("r")
+            if rep is None:
+                return self._json({"ok": False, "error": "HogWatch is still starting"}, 503)
+            try:
+                if path == "/api/email":
+                    return self._json({"ok": True, "settings": rep.settings.save(self._body())})
+                if path == "/api/email/send":
+                    if time.time() - last_manual_send[0] < 20:
+                        return self._json({"ok": False, "error": "Please wait a few seconds between sends."}, 429)
+                    last_manual_send[0] = time.time()
+                    result = rep.send(daily=False)
+                    return self._json(result, 200 if result["ok"] else 502)
+            except ReportError as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            except ValueError as e:
+                return self._json({"ok": False, "error": f"Bad request: {e}"}, 400)
+            self._send(404, b"not found", "text/plain")
 
         def log_message(self, fmt, *args):
             """Silence per-request logging; the dashboard polls every few seconds."""
