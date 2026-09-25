@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HogWatch</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232a78d6'/%3E%3Cpath d='M6 22 12 14l5 5 9-11' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>HogWatch</h1>
+      <p class="tagline">Who's slowing the internet, and what they're doing</p>
+    </div>
+    <ul class="sources" id="sources" aria-label="Data sources"></ul>
+  </header>
+
+  <main>
+    <section aria-labelledby="now-title">
+      <h2 id="now-title" class="visually-hidden">Right now</h2>
+      <div class="card status-card" id="status" aria-live="polite"></div>
+      <div id="live-incident"></div>
+      <div class="grid2">
+        <div class="card">
+          <h3>Devices using the internet right now</h3>
+          <p class="card-sub" id="eero-sub">From the eero, updated every 30 seconds</p>
+          <div id="now-devices"></div>
+        </div>
+        <div class="card">
+          <h3>Programs on this PC right now</h3>
+          <p class="card-sub" id="pc-sub">Last 10 seconds</p>
+          <div id="now-apps"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="setup" aria-label="Setup"></section>
+
+    <section aria-labelledby="hist-title" class="history">
+      <div class="filter-row">
+        <h2 id="hist-title">History</h2>
+        <div class="range" role="radiogroup" aria-label="Time range" id="range">
+          <button type="button" role="radio" data-hours="1">Last hour</button>
+          <button type="button" role="radio" data-hours="6">6 hours</button>
+          <button type="button" role="radio" data-hours="24">24 hours</button>
+          <button type="button" role="radio" data-hours="168">7 days</button>
+        </div>
+      </div>
+
+      <div id="history-body">
+        <div class="card">
+          <h3>Lag spikes and short dropouts</h3>
+          <p class="card-sub">Freezes of a few seconds, like the ones that disconnect games, and which link each one happened on.</p>
+          <div id="hiccups"></div>
+        </div>
+
+        <div class="card">
+          <h3>Slowdowns</h3>
+          <p class="card-sub">Newest first. Each one says who was using the most at the time.</p>
+          <div id="incidents"></div>
+        </div>
+
+        <div class="card">
+          <h3>Ping (how long the internet takes to respond, in milliseconds)</h3>
+          <p class="card-sub">Lower is better. Shaded periods are slowdowns.</p>
+          <div class="chart" id="chart-ping"></div>
+        </div>
+
+        <div class="grid2">
+          <div class="card">
+            <h3>Download by device (Mbps)</h3>
+            <p class="card-sub">The busiest devices on the eero</p>
+            <div class="chart" id="chart-dev-down"></div>
+          </div>
+          <div class="card">
+            <h3>Upload by device (Mbps)</h3>
+            <p class="card-sub">Heavy uploads jam the line for everyone</p>
+            <div class="chart" id="chart-dev-up"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h3>This PC (Mbps)</h3>
+          <p class="card-sub">Everything through this PC's network card</p>
+          <div class="chart" id="chart-pc"></div>
+        </div>
+
+        <div class="grid2">
+          <div class="card">
+            <h3>Devices: total use</h3>
+            <div id="table-devices"></div>
+          </div>
+          <div class="card">
+            <h3>Programs on this PC: total use</h3>
+            <div id="table-apps"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card help" aria-labelledby="help-title">
+      <h2 id="help-title">Why one person can slow down everyone</h2>
+      <p>When one device fills the connection (a big download, a 4K stream, or a heavy
+        <strong>upload</strong> like a cloud backup, live stream or torrent), everyone
+        else's data has to wait in line at the modem. Pages hang, video calls stutter and
+        game ping spikes, even if the plan is fast. HogWatch spots those moments by
+        watching ping, then records which device and program were busiest.</p>
+      <h3>Things that fix it</h3>
+      <ul>
+        <li><strong>Turn on eero's traffic management.</strong> In the eero app, go to Settings &rsaquo; eero Labs &rsaquo;
+          <em>Optimize for Conferencing and Gaming</em>. It stops one heavy user from freezing everyone
+          else, and it's the single biggest fix for this problem.</li>
+        <li><strong>Cap the big downloaders.</strong> Steam: Settings &rsaquo; Downloads &rsaquo; <em>Limit download
+          speed</em>. Windows Update: Settings &rsaquo; Windows Update &rsaquo; Advanced options &rsaquo; Delivery
+          Optimization &rsaquo; <em>Advanced options</em> to set limits, and turn off <em>Allow downloads from other PCs</em>.</li>
+        <li><strong>Cap or reschedule big uploads.</strong> OneDrive, Google Drive, Backblaze and torrent apps all
+          have an upload-limit setting. Night-time scheduling works too.</li>
+        <li><strong>DirecTV:</strong> an HD stream uses about 8 Mbps and 4K about 25 Mbps per TV. Several TVs
+          plus recordings can fill a smaller plan.</li>
+        <li>If a slowdown says <em>"home network"</em>, the eero itself was struggling. Move the eeros closer
+          together, or wire them to each other with Ethernet.</li>
+      </ul>
+    </section>
+  </main>
+
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>
