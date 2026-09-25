@@ -26,7 +26,7 @@ const s = (tag, attrs, ...kids) => build(document.createElementNS(SVGNS, tag), a
 /* ------------------------------------------------------------------ formatting */
 
 const fmtRate = (x) => (x == null ? "–" : x < 0.05 ? "0" : x < 10 ? x.toFixed(1) : Math.round(x).toLocaleString());
-const fmtMs = (x) => (x == null ? "–" : Math.round(x).toLocaleString());
+const fmtMs = (x) => (x == null ? "–" : x < 1 ? "<1" : Math.round(x).toLocaleString());
 function fmtVolume(mb) {
   if (mb == null) return "–";
   if (mb >= 1000) return (mb / 1000).toFixed(mb >= 10000 ? 0 : 1) + " GB";
@@ -56,6 +56,9 @@ const KIND_LABEL = {
 
 const state = { hours: 1, now: null, timeline: null, usage: null, incidents: null, incidentLimit: 15, offline: false };
 try { const saved = +localStorage.getItem("hw-hours"); if (saved) state.hours = saved; } catch (e) { /* storage blocked */ }
+// A link like /?hours=24 opens that range directly (handy for bookmarks).
+const linkedHours = +new URLSearchParams(location.search).get("hours");
+if ([1, 6, 24, 168].includes(linkedHours)) state.hours = linkedHours;
 
 async function getJSON(path) {
   const r = await fetch(path, { cache: "no-store" });
