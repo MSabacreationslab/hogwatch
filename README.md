@@ -1,7 +1,16 @@
 # HogWatch
 
+[![tests](https://github.com/MSabacreationslab/hogwatch/actions/workflows/tests.yml/badge.svg)](https://github.com/MSabacreationslab/hogwatch/actions/workflows/tests.yml)
+
 Finds out **who** is slowing the home internet to a crawl, **when**, and **what
 they're probably doing**, and shows it on a dashboard at <http://127.0.0.1:8765/>.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/dashboard-dark.png">
+  <img alt="HogWatch dashboard during a slowdown: a roommate's upload is named as the cause, and short lag spikes are traced to the wireless link between two eeros" src="docs/dashboard-light.png">
+</picture>
+
+<sub>Screenshot uses demo data; device names and rooms are made up.</sub>
 
 It watches three things at once:
 
