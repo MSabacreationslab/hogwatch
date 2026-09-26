@@ -235,6 +235,8 @@ def parse_device(d: dict) -> dict:
         f"{manufacturer or 'Unknown device'} ({mac[-5:]})")
     usage = d.get("usage") or {}
     profile = d.get("profile") or {}
+    if isinstance(profile, dict) and (profile.get("name") or "").strip().lower() in ("", "unassigned"):
+        profile = {}  # eero's placeholder for "no profile", not a person
     wired = d.get("connection_type") == "wired" or d.get("wireless") is False
     return {
         "mac": mac,

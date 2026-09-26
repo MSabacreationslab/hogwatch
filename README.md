@@ -70,6 +70,25 @@ that **share your wireless link** are marked. The same card lists any eero that
 lost its connection and reconnected, which shows drops even when they happen
 between pings.
 
+## Daily email report
+
+The dashboard's **Daily email report** card emails you every slowdown and dropout
+since the last report, with its reason, the game you were playing, and who was busy
+on the network. It's useful for tracking a problem over days, or for showing it to
+whoever owns the eero, or to AT&T.
+
+- **When:** once a day when HogWatch starts, or at 8 AM if it's already running,
+  plus **Send report now** anytime. **Preview report** shows it without sending.
+- **Sending account:** mail goes out through your own email account. For Gmail,
+  create an [App Password](https://myaccount.google.com/apppasswords) (needs 2-Step
+  Verification). It's a separate password that can only send mail and can be revoked
+  on its own. HogWatch stores it encrypted with Windows DPAPI in `data\email.json`,
+  so only your Windows account can read it, and the dashboard never sends it back.
+- **Other providers:** open "Not using Gmail?" and enter your provider's server and port.
+  HogWatch only sends over an encrypted connection.
+- **From a terminal:** `.venv\Scripts\python.exe -m hogwatch send-report` sends one now;
+  add `--preview` to save it as `data\report_preview.html` instead.
+
 ## Reading the results
 
 - **"Internet crawled"**: the line was full. Look at "Biggest user". An **upload**
@@ -102,5 +121,7 @@ Settings › eero Labs › **Optimize for Conferencing and Gaming**.
 - Per-program data comes from the `Microsoft-Windows-Kernel-Network` ETW provider (TCP + UDP, IPv4 + IPv6).
   Only internet traffic is counted per program; traffic to devices at home is left out.
 - The dashboard has no external scripts, so it keeps working while the internet is down.
-- Command line: `.venv\Scripts\python.exe -m hogwatch run | eero-login | eero-check | selftest`
+- The dashboard only answers requests addressed to `127.0.0.1` or `localhost` (blocks DNS
+  rebinding), and every change needs a custom header that other websites can't send.
+- Command line: `.venv\Scripts\python.exe -m hogwatch run | eero-login | eero-check | selftest | send-report`
 - Tests: `.venv\Scripts\python.exe -m unittest discover -s tests`

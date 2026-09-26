@@ -222,6 +222,25 @@ td .sub { color: var(--muted); font-size: 12px; display: block; overflow-wrap: a
 .tooltip .tt-val { font-weight: 650; font-variant-numeric: tabular-nums; }
 .tooltip .tt-name { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---- email report form ---- */
+.email-form { display: grid; gap: 12px; max-width: 620px; }
+.email-form label { display: grid; gap: 4px; font-size: 14px; font-weight: 600; }
+.email-form input[type=text], .email-form input[type=email], .email-form input[type=password], .email-form input[type=number] {
+  font: inherit; font-weight: 400; padding: 8px 10px; width: 100%;
+  border: 1px solid var(--axis); border-radius: 8px; background: var(--surface); color: var(--ink);
+}
+.email-form label.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
+.email-form label.check input { margin-top: 4px; }
+.email-form .hint { font-size: 13px; color: var(--ink-2); }
+.email-advanced { display: grid; gap: 10px; margin-top: 10px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.btn { border: 1px solid var(--border); background: var(--surface-2); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+.btn.primary { background: var(--ink); color: var(--surface); border-color: transparent; }
+.btn:disabled { opacity: .6; cursor: default; }
+#email-status { font-size: 14px; min-height: 1.5em; }
+#email-status.error { color: var(--critical-ink); }
+#email-status.ok { color: var(--good-ink); }
+
 /* ---- setup + help ---- */
 .steps { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 6px; font-size: 14.5px; }
 code, kbd { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 13px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }

@@ -99,6 +99,44 @@
       </div>
     </section>
 
+    <section class="card" aria-labelledby="email-title">
+      <h2 id="email-title">Daily email report</h2>
+      <p class="card-sub">Every slowdown and dropout, with the reason for each, in your inbox once a day. You can also send one right now.</p>
+      <form id="email-form" class="email-form" autocomplete="off" novalidate>
+        <label>Send reports to
+          <input type="text" name="to" inputmode="email" placeholder="you@example.com (separate several with commas)">
+        </label>
+        <label>Send from (your Gmail address)
+          <input type="email" name="from" placeholder="you@gmail.com">
+        </label>
+        <label>Gmail app password
+          <input type="password" name="password" autocomplete="new-password" placeholder="16 letters from Google">
+        </label>
+        <p class="hint">
+          An app password is a separate password that can only send mail, and you can delete it anytime.
+          To make one: turn on 2-Step Verification in your Google Account, then go to
+          <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">myaccount.google.com/apppasswords</a>,
+          name it "HogWatch", and paste the 16 letters here. It's stored encrypted, and only your Windows account can read it.
+        </p>
+        <label class="check"><input type="checkbox" name="daily">
+          <span>Email a report every day: when HogWatch starts, or at 8 AM if it's already running</span></label>
+        <details>
+          <summary>Not using Gmail?</summary>
+          <div class="email-advanced">
+            <label>Mail server <input type="text" name="smtp_host" placeholder="smtp.gmail.com"></label>
+            <label>Port <input type="number" name="smtp_port" min="1" max="65535" placeholder="587"></label>
+            <label>Login (if different from "Send from") <input type="text" name="username"></label>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="submit" class="btn primary">Save</button>
+          <button type="button" class="btn" id="email-send">Send report now</button>
+          <a href="/api/email/preview" target="_blank" rel="noopener">Preview report</a>
+        </div>
+        <p id="email-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
     <section class="card help" aria-labelledby="help-title">
       <h2 id="help-title">Why one person can slow down everyone</h2>
       <p>When one device fills the connection (a big download, a 4K stream, or a heavy

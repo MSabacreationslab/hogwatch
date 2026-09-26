@@ -709,6 +709,89 @@ function renderHistory() {
   renderTables();
 }
 
+/* ------------------------------------------------------------------ email report */
+
+async function postJSON(path, body) {
+  /* Every POST carries X-HogWatch: the server rejects anything without it, so other
+     web pages can't change settings or trigger emails. */
+  const r = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-HogWatch": "1" },
+    body: JSON.stringify(body || {}),
+  });
+  let data = {};
+  try { data = await r.json(); } catch (e) { /* non-JSON error page */ }
+  return { ok: r.ok && data.ok !== false, data };
+}
+
+function emailStatus(text, kind) {
+  const el = $("email-status");
+  el.textContent = text || "";
+  el.className = kind || "";
+}
+
+function describeEmailState(st, s) {
+  st = st || {};
+  if (st.last_error && (!st.last_sent_ts || st.last_error_ts > st.last_sent_ts)) {
+    return [`The last report couldn't be sent (${fmtClock(st.last_error_ts)}): ${st.last_error}`, "error"];
+  }
+  if (st.last_sent_ts) return [`Last report sent ${fmtClock(st.last_sent_ts)} to ${st.last_to}.`, ""];
+  if (!s.to || !s.from || !s.password_set) return ["Not set up yet. Fill in the fields above and press Save.", ""];
+  return [s.daily ? "Set up. The first daily report goes out the next time HogWatch starts, or at 8 AM." :
+    "Set up. Daily reports are off; use Send report now anytime.", ""];
+}
+
+async function loadEmail() {
+  let data;
+  try { data = await getJSON("/api/email"); } catch (e) { return; }
+  if (!data.settings) return;
+  const f = $("email-form"), s = data.settings;
+  f.elements.to.value = s.to || "";
+  f.elements.from.value = s.from || "";
+  f.elements.username.value = s.username || "";
+  f.elements.smtp_host.value = s.smtp_host || "";
+  f.elements.smtp_port.value = s.smtp_port || "";
+  f.elements.daily.checked = !!s.daily;
+  f.elements.password.value = "";
+  f.elements.password.placeholder = s.password_set ? "Saved. Type a new one only to replace it" : "16 letters from Google";
+  emailStatus(...describeEmailState(data.status, s));
+}
+
+async function saveEmail() {
+  const f = $("email-form").elements;
+  const body = {
+    to: f.to.value, from: f.from.value, username: f.username.value,
+    smtp_host: f.smtp_host.value || "smtp.gmail.com", smtp_port: f.smtp_port.value || 587, daily: f.daily.checked,
+  };
+  if (f.password.value) body.password = f.password.value; // blank = keep the saved one
+  const res = await postJSON("/api/email", body);
+  if (!res.ok) {
+    emailStatus(res.data.error || "Couldn't save the settings.", "error");
+    return false;
+  }
+  await loadEmail();
+  return true;
+}
+
+$("email-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (await saveEmail()) emailStatus("Saved.", "ok");
+});
+
+$("email-send").addEventListener("click", async () => {
+  const btn = $("email-send");
+  btn.disabled = true;
+  try {
+    if (!(await saveEmail())) return; // send what's on screen, not stale settings
+    emailStatus("Sending…", "");
+    const res = await postJSON("/api/email/send");
+    if (res.ok) emailStatus(`Sent to ${res.data.to.join(", ")}: “${res.data.subject}”`, "ok");
+    else emailStatus(res.data.error || "Couldn't send the report.", "error");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 /* ------------------------------------------------------------------ wiring */
 
 function setRange(hours) {
@@ -735,5 +818,6 @@ window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer
 
 setRange(state.hours);
 refreshNow();
+loadEmail();
 setInterval(refreshNow, 3000);
 setInterval(refreshHistory, 30000);
