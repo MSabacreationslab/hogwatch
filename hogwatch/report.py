@@ -24,6 +24,7 @@ from email.utils import formatdate, make_msgid
 from pathlib import Path
 
 from . import secret
+from .db import HICCUP_END
 from .incidents import fmt_mbps
 
 log = logging.getLogger(__name__)
@@ -157,7 +158,8 @@ def _advice(where: str, path: dict | None) -> str | None:
 
 def build_report(db, since: float, until: float) -> dict:
     """Everything that went wrong in [since, until): subject line, plain text, and HTML."""
-    hiccups = db.query("SELECT * FROM hiccup WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts", (since, until))
+    hiccups = db.query(f"SELECT start_ts, {HICCUP_END} AS end_ts, where_, where_text, lost, worst_ms, busy "
+                       "FROM hiccup WHERE start_ts >= ? AND start_ts < ? ORDER BY start_ts", (since, until))
     incidents = db.query("SELECT * FROM incident WHERE start_ts >= ? AND start_ts < ? AND end_ts IS NOT NULL "
                          "ORDER BY start_ts", (since, until))
     events = db.query("SELECT * FROM eero_event WHERE ts >= ? AND ts < ? ORDER BY ts", (since, until))
@@ -170,7 +172,7 @@ def build_report(db, since: float, until: float) -> dict:
     for h in hiccups:
         where_text.setdefault(h["where_"], h["where_text"])
         where_secs[h["where_"]] += h["end_ts"] - h["start_ts"]
-    in_game = sum(1 for h in hiccups if h["game"])
+    # Games played are deliberately left out: this report may be forwarded to others.
     down_secs = sum(h["end_ts"] - h["start_ts"] for h in hiccups)
     advice = None
     if hiccups:
@@ -211,8 +213,7 @@ def build_report(db, since: float, until: float) -> dict:
     if not (nd or ns):
         lines.append("No slowdowns or dropouts. Everything ran normally.")
     else:
-        lines.append(f"Dropouts (lag spikes): {nd}, about {_dur(down_secs)} offline in total"
-                     + (f", {in_game} during a game" if in_game else ""))
+        lines.append(f"Dropouts (lag spikes): {nd}, about {_dur(down_secs)} offline in total")
         for where, n in where_counts.most_common():
             lines.append(f"  {n} {where_text[where]} ({_dur(where_secs[where])})")
         lines.append(f"Slowdowns: {ns}")
@@ -222,7 +223,7 @@ def build_report(db, since: float, until: float) -> dict:
         lines += ["", "DROPOUTS"]
         for h in hiccups:
             lines.append(f"- {_clock(h['start_ts'])}, {_dur(h['end_ts'] - h['start_ts'])}, {how_bad(h)}: {h['where_text']}"
-                         + (f". Game: {h['game']}" if h["game"] else "") + f". Busy: {busy_text(h)}")
+                         f". Busy: {busy_text(h)}")
     if incidents:
         lines += ["", "SLOWDOWNS"]
         for i in incidents:
@@ -245,7 +246,7 @@ def build_report(db, since: float, until: float) -> dict:
         parts.append('<p style="font-size:16px">&#10004; No slowdowns or dropouts. Everything ran normally.</p>')
     else:
         parts.append(f'<p style="font-size:16px;margin:0 0 6px"><b>{nd} dropout{"s" if nd != 1 else ""}</b> '
-                     f'(about {e(_dur(down_secs))} offline{f", {in_game} during a game" if in_game else ""}) and '
+                     f'(about {e(_dur(down_secs))} offline) and '
                      f'<b>{ns} slowdown{"s" if ns != 1 else ""}</b>.</p><ul style="margin:0 0 12px">')
         for where, n in where_counts.most_common():
             parts.append(f"<li><b>{n}</b> {e(where_text[where])} ({e(_dur(where_secs[where]))})</li>")
@@ -256,11 +257,11 @@ def build_report(db, since: float, until: float) -> dict:
     if hiccups:
         parts.append(f'<h3 style="margin:20px 0 6px">Dropouts</h3><table style="border-collapse:collapse;font-size:14px;width:100%">'
                      f"<tr><th {th}>When</th><th {th}>Length</th><th {th}>How bad</th><th {th}>Where</th>"
-                     f"<th {th}>Game</th><th {th}>Busy on the network</th></tr>")
+                     f"<th {th}>Busy on the network</th></tr>")
         for h in hiccups:
             parts.append(f"<tr><td {td}>{e(_clock(h['start_ts']))}</td><td {td}>{e(_dur(h['end_ts'] - h['start_ts']))}</td>"
                          f"<td {td}>{e(how_bad(h))}</td><td {td}>{e(h['where_text'] or '')}</td>"
-                         f"<td {td}>{e(h['game'] or '–')}</td><td {td}>{e(busy_text(h))}</td></tr>")
+                         f"<td {td}>{e(busy_text(h))}</td></tr>")
         parts.append("</table>")
     if incidents:
         parts.append(f'<h3 style="margin:20px 0 6px">Slowdowns</h3><table style="border-collapse:collapse;font-size:14px;width:100%">'

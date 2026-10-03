@@ -17,6 +17,7 @@ the eero app: Settings > Network settings > Admins).
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import re
@@ -27,6 +28,14 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 API = "https://api-user.e2ro.com"
+
+
+def _body(resp) -> bytes:
+    """Read a response body, un-gzipping it if the server compressed it."""
+    raw = resp.read()
+    if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+        raw = gzip.decompress(raw)
+    return raw
 
 
 class EeroError(Exception):
@@ -68,19 +77,20 @@ class Eero:
 
     def _call(self, method: str, path: str, body: dict | None = None, retry: bool = True):
         """Make one API call and return its `data` field, refreshing the session once if needed."""
+        # gzip: the device list is ~90 KB of JSON every 30 s; compressed it's a tenth of that.
         headers = {"Content-Type": "application/json", "Accept": "application/json",
-                   "User-Agent": "HogWatch/1.0 (home network monitor)"}
+                   "Accept-Encoding": "gzip", "User-Agent": "HogWatch/1.0 (home network monitor)"}
         if self.token:
             headers["Cookie"] = f"s={self.token}"
         data = json.dumps(body).encode() if body is not None else (b"" if method == "POST" else None)
         req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
-                payload = json.load(resp)
+                payload = json.loads(_body(resp))
         except urllib.error.HTTPError as e:
             try:
-                err = (json.load(e).get("meta") or {}).get("error", "")
-            except ValueError:
+                err = (json.loads(_body(e)).get("meta") or {}).get("error", "")
+            except (ValueError, OSError):
                 err = ""
             if e.code == 401 and retry and path != "/2.2/login/refresh" and self.token:
                 self.refresh()
@@ -143,6 +153,21 @@ def parse_unit(u: dict, now: float) -> dict:
     up = u.get("uptime") or {}
     parent = u.get("wireless_upstream_node") or {}
     cloud_s = up.get("since_cloud_connection_s")
+    reboot_s = up.get("since_last_reboot_s")
+    bands = {}
+    for key, stats in (u.get("radio_channel_stats") or {}).items():
+        if isinstance(stats, dict) and stats.get("channel"):
+            bands[_BAND_NAMES.get(key, key)] = {
+                "channel": stats.get("channel"), "width": stats.get("channel_width"),
+                "utilization": stats.get("channel_utilization"), "clients": stats.get("client_count"),
+                "tx_power": stats.get("tx_power"),
+            }
+    ports = []
+    for p in (u.get("ethernet_status") or {}).get("statuses") or []:
+        speed = str(p.get("speed") or "").lstrip("P")
+        ports.append({"port": str(p.get("port_name") or p.get("interfaceNumber")), "carrier": bool(p.get("hasCarrier")),
+                      "speed": int(speed) if p.get("hasCarrier") and speed.isdigit() else None,
+                      "wan": bool(p.get("isWanPort"))})
     return {
         "name": u.get("location") or u.get("serial") or "eero",
         "ip": u.get("ip_address"),
@@ -152,7 +177,20 @@ def parse_unit(u: dict, now: float) -> dict:
         "radio": (parent.get("primary_mesh_radio") or "").replace("GHz", " GHz") or None,
         "model": u.get("model"),
         "reconnected_ts": int(now - cloud_s) if isinstance(cloud_s, (int, float)) else None,
+        # Health details for the installer report.
+        "rebooted_ts": int(now - reboot_s) if isinstance(reboot_s, (int, float)) and reboot_s else None,
+        "bars": u.get("mesh_quality_bars"),
+        "status": u.get("status"),
+        "firmware": u.get("os_version"),
+        "wired_clients": u.get("connected_wired_clients_count"),
+        "wireless_clients": u.get("connected_wireless_clients_count"),
+        "bands": bands,
+        "ports": ports,
     }
+
+
+_BAND_NAMES = {"band_2_4GHz": "2.4 GHz", "band_5GHz_full": "5 GHz", "band_5GHz_lower": "5 GHz (low)",
+               "band_5GHz_upper": "5 GHz (high)", "band_6GHz": "6 GHz"}
 
 
 def uplink_chain(units: list[dict], start: str | None) -> list[dict]:

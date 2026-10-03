@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from .db import HICCUP_END
+from .installer import build_installer_report
 from .report import ReportError, build_report
 
 log = logging.getLogger(__name__)
@@ -119,13 +121,15 @@ def usage(db, hours: float) -> dict:
 def hiccups(db, hours: float) -> dict:
     """Short lag spikes in the window: counts by where they happened, the list, eero reconnects, and the mesh path."""
     start = time.time() - hours * 3600
-    items = db.query("SELECT * FROM hiccup WHERE start_ts >= ? ORDER BY start_ts DESC LIMIT 300", (start,))
+    items = db.query(f"SELECT id, start_ts, {HICCUP_END} AS end_ts, where_, where_text, rounds, lost, worst_ms, "
+                     "worst_lan_ms, worst_node_ms, game, busy FROM hiccup WHERE start_ts >= ? "
+                     "ORDER BY start_ts DESC LIMIT 300", (start,))
     for h in items:
         h["busy"] = json.loads(h["busy"]) if h["busy"] else []
     summary = db.query(
         # Grouped by the text too, so spikes from before and after a change (e.g. the
         # wireless link being replaced by a cable) are counted separately.
-        "SELECT where_, where_text, COUNT(*) AS n, SUM(end_ts - start_ts) AS secs, "
+        f"SELECT where_, where_text, COUNT(*) AS n, SUM({HICCUP_END} - start_ts) AS secs, "
         "SUM(CASE WHEN game IS NOT NULL THEN 1 ELSE 0 END) AS in_game "
         "FROM hiccup WHERE start_ts >= ? GROUP BY where_, where_text ORDER BY n DESC", (start,))
     events = db.query("SELECT ts, unit, kind, detail FROM eero_event WHERE ts >= ? ORDER BY ts DESC", (int(start),))
@@ -189,6 +193,9 @@ def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown,
                     # Settings never include the password itself, only whether one is saved.
                     return self._json({"settings": rep.settings.load(), "status": rep.status()} if rep
                                       else {"error": "starting"})
+                if url.path == "/installer-report":
+                    page = build_installer_report(db, days=min(max(float(q.get("days", 7)), 1), 14))
+                    return self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
                 if url.path == "/api/email/preview":
                     now = time.time()
                     body = build_report(db, now - min(float(q.get("hours", 24)), 24 * 7) * 3600, now)["html"]

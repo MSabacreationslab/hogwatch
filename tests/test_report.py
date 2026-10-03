@@ -98,8 +98,10 @@ class ReportContentTests(TempDirTest):
         self.assertEqual(r["counts"], {"dropouts": 5, "slowdowns": 1, "reconnects": 1})
         self.assertTrue(r["subject"].startswith("HogWatch: 5 dropouts and 1 slowdown since"))
         self.assertIn(f"4 {LINK}", r["text"])
-        self.assertIn("1 during a game", r["text"])
-        self.assertIn("Game: League of Legends", r["text"])
+        # Games are left out of reports: they may be forwarded to other people.
+        for body in (r["text"], r["html"]):
+            self.assertNotIn("League of Legends", body)
+            self.assertNotIn("game", body.lower())
         self.assertIn("The connection dropped out between your eeros.", r["text"])
         self.assertIn("Ethernet cable between those two eeros", r["text"])  # 4 of 5 on one link -> advice
         self.assertIn("Upstairs eero reconnected", r["text"])
