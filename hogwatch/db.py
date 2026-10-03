@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 SCHEMA = """
--- Ping results, one row per 10-second bucket per role (lan / isp / internet).
+-- Ping results, one row per 10-second bucket per role (node / lan / isp / internet /
+-- unit:<eero name>). jitter_ms = average change between consecutive pings.
 CREATE TABLE IF NOT EXISTS latency (
     ts INTEGER NOT NULL, role TEXT NOT NULL,
     sent INTEGER NOT NULL, lost INTEGER NOT NULL,
@@ -75,8 +76,33 @@ CREATE INDEX IF NOT EXISTS hiccup_start ON hiccup(start_ts);
 CREATE TABLE IF NOT EXISTS eero_event (ts INTEGER NOT NULL, unit TEXT NOT NULL, kind TEXT, detail TEXT);
 CREATE INDEX IF NOT EXISTS eero_event_ts ON eero_event(ts);
 
+-- Each eero's health every 2 minutes: how it links to the others, its radios and
+-- Ethernet ports. Evidence for an installer (e.g. a wall cable that never links).
+CREATE TABLE IF NOT EXISTS unit_sample (
+    ts INTEGER NOT NULL, unit TEXT NOT NULL, gateway INTEGER, wired INTEGER,
+    upstream TEXT, radio TEXT, bars INTEGER, status TEXT, firmware TEXT,
+    wired_clients INTEGER, wireless_clients INTEGER,
+    bands TEXT,  -- JSON {"5 GHz": {"channel", "width", "utilization", "clients", "tx_power"}, ...}
+    ports TEXT   -- JSON [{"port", "carrier", "speed", "wan"}, ...]
+);
+CREATE INDEX IF NOT EXISTS unit_sample_ts ON unit_sample(ts);
+
+-- This PC's own network card going down or up (rules the PC's cable in or out).
+CREATE TABLE IF NOT EXISTS link_event (ts INTEGER NOT NULL, what TEXT NOT NULL, detail TEXT);
+CREATE INDEX IF NOT EXISTS link_event_ts ON link_event(ts);
+
+-- The eero's own speed tests (shows whether the internet line itself is healthy).
+CREATE TABLE IF NOT EXISTS speedtest (date TEXT PRIMARY KEY, ts INTEGER, down REAL, up REAL);
+
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
 """
+
+# A dropout's end, capped by how many bad pings it had (at most 2 s apart). Dropouts
+# recorded before sleep handling existed could stretch across hours of the PC sleeping.
+HICCUP_END = "(start_ts + MIN(end_ts - start_ts, rounds * 2 + 4))"
+
+# Columns added after the first release; older databases get them on startup.
+MIGRATIONS = [("latency", "jitter_ms", "REAL")]
 
 
 class DB:
@@ -96,6 +122,10 @@ class DB:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=NORMAL")
             self.conn.executescript(SCHEMA)
+            for table, column, kind in MIGRATIONS:
+                cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                if column not in cols:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
 
     def execute(self, sql: str, params=()) -> int | None:
         """Run one statement; returns lastrowid (useful after INSERT)."""
@@ -121,6 +151,11 @@ class DB:
         with self.lock:
             return [dict(r) for r in self.conn.execute(sql, params).fetchall()]
 
+    def rows(self, sql: str, params=()) -> list:
+        """Like query(), but plain rows instead of dicts: lighter for big scans (reports)."""
+        with self.lock:
+            return self.conn.execute(sql, params).fetchall()
+
     def get_meta(self, key: str, default: str | None = None) -> str | None:
         """Read a small persisted value (e.g. the eero speed test result)."""
         rows = self.query("SELECT v FROM meta WHERE k = ?", (key,))
@@ -133,7 +168,8 @@ class DB:
     def prune(self, retention_days: int) -> None:
         """Delete history older than the retention window."""
         cutoff = int(time.time()) - retention_days * 86400
-        for table in ("latency", "pc_total", "pc_app", "pc_remote", "eero_sample", "eero_event"):
+        for table in ("latency", "pc_total", "pc_app", "pc_remote", "eero_sample", "eero_event", "unit_sample",
+                      "link_event", "speedtest"):
             self.execute(f"DELETE FROM {table} WHERE ts < ?", (cutoff,))
         self.execute("DELETE FROM incident WHERE start_ts < ?", (cutoff,))
         self.execute("DELETE FROM hiccup WHERE start_ts < ?", (cutoff,))

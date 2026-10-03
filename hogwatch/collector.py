@@ -78,11 +78,11 @@ class Collector:
     def start(self) -> None:
         """Discover the network path, start per-program tracing, launch the threads."""
         self._close_stale_incidents()
-        lan = self.cfg.get("lan_target") or ping.hop(1)
-        isp = ping.hop(2, toward=self.cfg["internet_targets"][0])
-        self.targets = {"lan": lan, "isp": isp, "internet": self.cfg["internet_targets"]}
-        self.db.set_meta("targets", json.dumps(self.targets))
-        log.info("targets: %s", self.targets)
+        self.targets = {"lan": None, "isp": None, "internet": self.cfg["internet_targets"]}
+        self._discover_targets()  # retried from the ping loop if the network isn't up yet
+        if not self.db.get_meta("link_watch_since"):
+            # Reports may only claim "the PC's cable never dropped" for the time it was watched.
+            self.db.set_meta("link_watch_since", str(int(time.time())))
         self.pc = PCMonitor()
         for fn in (self._ping_loop, self._pc_loop, self._eero_loop, self._housekeeping_loop):
             threading.Thread(target=self._guard(fn), name=fn.__name__.strip("_"), daemon=True).start()
@@ -122,28 +122,47 @@ class Collector:
         interval = float(self.cfg["ping_interval_s"])
         timeout = int(self.cfg["ping_timeout_ms"])
         inet = list(self.cfg["internet_targets"])
-        pool = ThreadPoolExecutor(max_workers=len(inet) + 3, thread_name_prefix="icmp")
+        pool = ThreadPoolExecutor(max_workers=12, thread_name_prefix="icmp")
         buckets: dict[str, dict] = {}
+        last_rtt: dict[str, float | None] = {}  # previous ping per role, for jitter
         bucket_ts = int(time.time()) // BUCKET_S * BUCKET_S
+        last_round = time.time()
+        last_discovery = 0.0
         while not self.stopping.is_set():
             t0 = time.time()
+            if t0 - last_round > 30:
+                # Monitoring paused (the PC slept or hung): close anything open at the last
+                # moment we saw it, so the gap isn't counted as a 10-hour dropout.
+                self._close_after_gap(last_round)
+                last_rtt.clear()
+            last_round = t0
+            if (not self.targets.get("lan") or not self.targets.get("isp")) and t0 - last_discovery > 30:
+                # At boot the network may not be up when HogWatch starts; keep looking.
+                last_discovery = t0
+                self._discover_targets()
             lan = self.targets.get("lan")
             node = self.targets.get("node")  # the eero this PC plugs into, once eero tells us
+            units = dict(self.targets.get("units") or {})  # the other eeros: one record per link
             futs = {("inet", n): pool.submit(ping.ping, ip, timeout) for n, ip in enumerate(inet)}
             if lan:
                 futs["lan"] = pool.submit(ping.ping, lan, timeout)
             if node:
                 futs["node"] = pool.submit(ping.ping, node, timeout)
+            for name, ip in units.items():
+                futs[("unit", name)] = pool.submit(ping.ping, ip, timeout)
             futs["isp"] = pool.submit(ping.ping, inet[0], timeout, 2)
             res = {k: f.result()[0] for k, f in futs.items()}
-            internet = min((v for k, v in res.items() if isinstance(k, tuple) and v is not None), default=None)
+            internet = min((v for k, v in res.items() if k[0] == "inet" and v is not None), default=None)
             lan_ms, isp_ms, node_ms = res.get("lan"), res.get("isp"), res.get("node")
 
-            for role, v, probed in (("internet", internet, True), ("lan", lan_ms, bool(lan)),
-                                    ("isp", isp_ms, True), ("node", node_ms, bool(node))):
+            rows = [("internet", internet, True), ("lan", lan_ms, bool(lan)),
+                    ("isp", isp_ms, True), ("node", node_ms, bool(node))]
+            rows += [(f"unit:{name}", res.get(("unit", name)), True) for name in units]
+            for role, v, probed in rows:
                 if not probed:
                     continue
-                b = buckets.setdefault(role, {"sent": 0, "lost": 0, "sum": 0.0, "n": 0, "max": None})
+                b = buckets.setdefault(role, {"sent": 0, "lost": 0, "sum": 0.0, "n": 0, "max": None,
+                                              "jsum": 0.0, "jn": 0})
                 b["sent"] += 1
                 if v is None:
                     b["lost"] += 1
@@ -151,6 +170,13 @@ class Collector:
                     b["sum"] += v
                     b["n"] += 1
                     b["max"] = v if b["max"] is None else max(b["max"], v)
+                    # Jitter = how much each ping differs from the one before. Games and voice
+                    # suffer from uneven delay even when the average looks fine.
+                    prev = last_rtt.get(role)
+                    if prev is not None:
+                        b["jsum"] += abs(v - prev)
+                        b["jn"] += 1
+                last_rtt[role] = v
 
             with self.lock:
                 self.rounds.append((t0, internet, lan_ms, isp_ms, node_ms))
@@ -169,12 +195,45 @@ class Collector:
 
             if t0 >= bucket_ts + BUCKET_S:
                 self.db.executemany(
-                    "INSERT INTO latency(ts, role, sent, lost, avg_ms, max_ms) VALUES(?,?,?,?,?,?)",
-                    [(bucket_ts, role, b["sent"], b["lost"], (b["sum"] / b["n"]) if b["n"] else None, b["max"])
+                    "INSERT INTO latency(ts, role, sent, lost, avg_ms, max_ms, jitter_ms) VALUES(?,?,?,?,?,?,?)",
+                    [(bucket_ts, role, b["sent"], b["lost"], (b["sum"] / b["n"]) if b["n"] else None, b["max"],
+                      (b["jsum"] / b["jn"]) if b["jn"] else None)
                      for role, b in buckets.items()])
                 buckets = {}
                 bucket_ts = int(t0) // BUCKET_S * BUCKET_S
             self.stopping.wait(max(0.0, interval - (time.time() - t0)))
+
+    def _discover_targets(self) -> None:
+        """Find the main eero (hop 1) and the ISP gateway (hop 2); fall back to the eero's own data."""
+        lan = self.cfg.get("lan_target") or ping.hop(1)
+        isp = ping.hop(2, toward=self.cfg["internet_targets"][0])
+        with self.lock:
+            if lan:
+                self.targets["lan"] = lan
+            elif not self.targets.get("lan"):
+                gw = next((u for u in self.path.get("units") or [] if u.get("gateway") and u.get("ip")), None)
+                if gw:
+                    self.targets["lan"] = gw["ip"]
+            if isp:
+                self.targets["isp"] = isp
+            targets = dict(self.targets)
+        self.db.set_meta("targets", json.dumps(targets))
+        if isp:
+            self.db.set_meta("isp_seen", isp)  # remembered even if a later discovery fails
+        if lan or isp:
+            log.info("targets: %s", targets)
+
+    def _close_after_gap(self, last_seen: float) -> None:
+        """Close an open dropout or slowdown at `last_seen` after a pause in monitoring."""
+        hiccup = self.hiccups.flush()
+        if hiccup:
+            self._record_hiccup(hiccup)
+        with self.lock:
+            if self.incident:
+                self._incident_end(last_seen)
+            self.detector.active = False
+            self.detector.recent.clear()
+        log.info("monitoring resumed after a %.0f s pause", time.time() - last_seen)
 
     # ------------------------------------------------------------------ lag spikes
 
@@ -216,16 +275,29 @@ class Collector:
                 "gateway": gateway["name"] if gateway else None, "chain": [c["name"] for c in chain],
                 "radio": node["radio"] if node else None, "wired": node["wired"] if node else None,
                 "on_link_units": on_link,
-                "units": [{k: u[k] for k in ("name", "gateway", "wired", "upstream", "radio", "model")} for u in units]}
+                "units": [{k: u[k] for k in ("name", "gateway", "wired", "upstream", "radio", "model", "ip")}
+                          for u in units]}
         with self.lock:
             self.path = path
             if node and node["ip"]:
                 self.targets["node"] = node["ip"]
             else:
                 self.targets.pop("node", None)
+            if not self.targets.get("lan") and gateway and gateway["ip"]:
+                self.targets["lan"] = gateway["ip"]  # hop discovery failed; eero told us anyway
+            # The other eeros (not ours, not the main one, which are pinged already) get pinged
+            # too, so every wireless link between eeros has its own record.
+            skip = {node["name"] if node else None, gateway["name"] if gateway else None}
+            self.targets["units"] = {u["name"]: u["ip"] for u in units if u["ip"] and u["name"] not in skip}
             targets = dict(self.targets)
         self.db.set_meta("eero_path", json.dumps(path))
         self.db.set_meta("targets", json.dumps(targets))
+        self.db.executemany(
+            "INSERT INTO unit_sample(ts, unit, gateway, wired, upstream, radio, bars, status, firmware, "
+            "wired_clients, wireless_clients, bands, ports) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(int(now), u["name"], int(u["gateway"]), int(u["wired"]), u["upstream"], u["radio"], u["bars"],
+              u["status"], u["firmware"], u["wired_clients"], u["wireless_clients"], json.dumps(u["bands"]),
+              json.dumps(u["ports"])) for u in units])
         for u in units:
             ts = u["reconnected_ts"]
             if not ts:
@@ -297,12 +369,23 @@ class Collector:
     # ------------------------------------------------------------------ this PC
 
     def _pc_loop(self) -> None:
-        """Every 10s: record card totals and per-program usage."""
+        """Every 10s: record card totals and per-program usage, and note the PC's cable link changing."""
         last_update = 0.0
+        last_link = None
         while not self.stopping.wait(BUCKET_S):
             s = self.pc.sample()
             ts = int(time.time())
             secs = s["secs"]
+            # This PC's own Ethernet link: a drop or a fall to 100 Mbps would point at the
+            # PC's cable or port rather than the eeros.
+            stats = psutil.net_if_stats().get(self.pc.nic) if self.pc.nic else None
+            link = (bool(stats.isup), int(stats.speed or 0)) if stats else None
+            if link and last_link and link != last_link:
+                what = "up" if link[0] else "down"
+                self.db.execute("INSERT INTO link_event(ts, what, detail) VALUES(?,?,?)",
+                                (ts, what, json.dumps({"speed_mbps": link[1], "before_mbps": last_link[1]})))
+                log.warning("this PC's network link went %s (%s Mbps)", what, link[1])
+            last_link = link or last_link
             self.db.execute("INSERT INTO pc_total(ts, secs, rx_bytes, tx_bytes) VALUES(?,?,?,?)",
                             (ts, secs, s["rx"], s["tx"]))
             self.db.executemany("INSERT INTO pc_app(ts, app, rx_bytes, tx_bytes) VALUES(?,?,?,?)",
@@ -379,7 +462,7 @@ class Collector:
                                       "usage_reported": bool(with_usage), "network": self.eero.network_name}
                     if self.incident:
                         self.incident.add_eero(connected)
-                if now - last_units > 300:
+                if now - last_units > 120:
                     last_units = now
                     self._refresh_units(connected, now)
                 if now - last_speed > 1800:
@@ -387,6 +470,8 @@ class Collector:
                     speed = speed_from_network(self.eero.network())
                     if speed:
                         self.db.set_meta("eero_speed", json.dumps(speed))
+                        self.db.execute("INSERT OR IGNORE INTO speedtest(date, ts, down, up) VALUES(?,?,?,?)",
+                                        (speed.get("date") or str(int(now)), int(now), speed.get("down"), speed.get("up")))
             except LoginNeeded as e:
                 with self.lock:
                     self.eero_live = {"status": "login_needed", "message": str(e), "devices": [], "ts": None}

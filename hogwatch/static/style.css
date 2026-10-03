@@ -236,6 +236,9 @@ td .sub { color: var(--muted); font-size: 12px; display: block; overflow-wrap: a
 .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .btn { border: 1px solid var(--border); background: var(--surface-2); padding: 8px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; }
 .btn.primary { background: var(--ink); color: var(--surface); border-color: transparent; }
+a.btn { display: inline-block; text-decoration: none; color: var(--ink); }
+a.btn.primary { color: var(--surface); }
+.hint { font-size: 13px; color: var(--ink-2); margin-top: 8px; }
 .btn:disabled { opacity: .6; cursor: default; }
 #email-status { font-size: 14px; min-height: 1.5em; }
 #email-status.error { color: var(--critical-ink); }

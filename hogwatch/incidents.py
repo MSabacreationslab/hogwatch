@@ -170,7 +170,17 @@ class HiccupTracker:
         self.good += 1
         if self.good < self.END_AFTER_GOOD:
             return None
+        return self._finish()
+
+    def flush(self) -> dict | None:
+        """End any open dropout at its last bad round (used when monitoring pauses, e.g.
+        the PC sleeps, so the sleep isn't counted as part of the dropout)."""
+        return self._finish() if self.cur else None
+
+    def _finish(self) -> dict | None:
+        """Close the open dropout and decide where it was; None if it was too small to count."""
         c, self.cur = self.cur, None
+        self.good = 0
         # One slightly slow ping is noise; keep drops, repeats, and big spikes.
         if not (c["lost"] or c["rounds"] >= 2 or (c["worst"] or 0) >= 200 or (c["worst_lan"] or 0) >= 200):
             return None

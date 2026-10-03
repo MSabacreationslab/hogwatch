@@ -89,6 +89,34 @@ whoever owns the eero, or to AT&T.
 - **From a terminal:** `.venv\Scripts\python.exe -m hogwatch send-report` sends one now;
   add `--preview` to save it as `data\report_preview.html` instead.
 
+## Report for your installer
+
+**Report for your installer** on the dashboard (or `python -m hogwatch installer-report`, which also
+saves a PDF) builds a technical report for whoever installed or services the eeros:
+
+- **Summary of findings with numbers.** Which link is dropping and how often, eero reconnects,
+  whether the Ethernet run between eeros ever links, the band and channel width on each hop
+  (and whether it overlaps radar-shared DFS channels), mesh route changes, double NAT behind the
+  ISP gateway, and whether the internet line itself is healthy.
+- **Requested work**, generated from those findings.
+- **Evidence:** the eero layout, ping delay, jitter and loss to every hop, dropouts by day and time
+  of day, the longest dropouts, eero reconnects, Ethernet port link checks, radio and channel history,
+  speed tests, and an appendix listing every dropout.
+
+The report reads only measurements of the network itself. It never includes device names, people,
+programs or games, so it's safe to send to an outside company. Add your own notes in the report
+before printing it.
+
+### What's monitored (all non-invasive)
+
+- One small ping per second to this PC's eero, the main eero, every other eero, the ISP gateway
+  and two internet servers, with delay, loss and jitter stored per 10 seconds.
+- Each eero's status every 2 minutes, as eero's app reports it: backhaul (cable or wireless band,
+  and which eero it relays through), signal bars, channel, width, how busy each radio is, connected
+  device counts, firmware, and every Ethernet port's link state and speed.
+- eero reconnects, eero speed tests, and this PC's own network-card link going down or up.
+- Nothing about the content of anyone's traffic is captured.
+
 ## Reading the results
 
 - **"Internet crawled"**: the line was full. Look at "Biggest user". An **upload**
@@ -123,5 +151,5 @@ Settings › eero Labs › **Optimize for Conferencing and Gaming**.
 - The dashboard has no external scripts, so it keeps working while the internet is down.
 - The dashboard only answers requests addressed to `127.0.0.1` or `localhost` (blocks DNS
   rebinding), and every change needs a custom header that other websites can't send.
-- Command line: `.venv\Scripts\python.exe -m hogwatch run | eero-login | eero-check | selftest | send-report`
+- Command line: `.venv\Scripts\python.exe -m hogwatch run | eero-login | eero-check | selftest | send-report | installer-report`
 - Tests: `.venv\Scripts\python.exe -m unittest discover -s tests`

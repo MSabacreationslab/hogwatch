@@ -5,6 +5,7 @@
     python -m hogwatch eero-check           show what the eero reports right now
     python -m hogwatch selftest             15-second check that everything works
     python -m hogwatch send-report          email the last 24 hours now (--preview: save it as HTML instead)
+    python -m hogwatch installer-report     technical report for the eero installer (HTML + PDF in data\\)
 """
 
 from __future__ import annotations
@@ -223,6 +224,24 @@ def cmd_send_report(args) -> int:
     return 1
 
 
+def cmd_installer_report(args) -> int:
+    """Write the installer report as HTML and (with Edge or Chrome installed) PDF in data\\."""
+    from .db import DB
+    from .installer import build_installer_report, save_pdf
+
+    db = DB(DATA_DIR / "hogwatch.db")
+    page = build_installer_report(db, days=args.days, note=args.note or "")
+    html_path = DATA_DIR / "installer_report.html"
+    html_path.write_text(page, encoding="utf-8")
+    print(f"HTML report: {html_path}")
+    pdf_path = DATA_DIR / "installer_report.pdf"
+    if save_pdf(html_path, pdf_path, DATA_DIR / "pdf-browser-profile"):
+        print(f"PDF report:  {pdf_path}")
+    else:
+        print("No Edge or Chrome found for the PDF: open the HTML report and use Print > Save as PDF.")
+    return 0
+
+
 def main() -> int:
     """Parse the command and run it."""
     p = argparse.ArgumentParser(prog="hogwatch", description="Find out who is slowing the internet down.")
@@ -236,12 +255,16 @@ def main() -> int:
     sr = sub.add_parser("send-report", help="email the recent slowdowns and dropouts now")
     sr.add_argument("--hours", type=float, default=24, help="how far back to cover (default 24)")
     sr.add_argument("--preview", action="store_true", help="save the report as HTML instead of sending")
+    ir = sub.add_parser("installer-report", help="technical report for whoever services the eeros (HTML + PDF)")
+    ir.add_argument("--days", type=float, default=7, help="how far back to cover (1-14, default 7)")
+    ir.add_argument("--note", help="notes from the homeowner to include")
     args = p.parse_args()
     if args.cmd is None:
         args = p.parse_args(["run"])
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     return {"run": cmd_run, "eero-login": cmd_eero_login, "eero-check": cmd_eero_check,
-            "selftest": cmd_selftest, "send-report": cmd_send_report}[args.cmd](args)
+            "selftest": cmd_selftest, "send-report": cmd_send_report,
+            "installer-report": cmd_installer_report}[args.cmd](args)
 
 
 if __name__ == "__main__":
