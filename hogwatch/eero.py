@@ -17,6 +17,7 @@ the eero app: Settings > Network settings > Admins).
 
 from __future__ import annotations
 
+import base64
 import gzip
 import json
 import logging
@@ -24,6 +25,8 @@ import re
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from . import secret
 
 log = logging.getLogger(__name__)
 
@@ -58,11 +61,15 @@ class Eero:
         if session_path.exists():
             try:
                 s = json.loads(session_path.read_text(encoding="utf-8"))
-                self.token = s.get("token")
                 self.network_url = s.get("network_url")
                 self.network_name = s.get("network_name")
+                if s.get("token_dpapi"):
+                    self.token = secret.unprotect(base64.b64decode(s["token_dpapi"]))
+                elif s.get("token"):
+                    self.token = s["token"]  # plain text from an older version: encrypt it now
+                    self.save()
             except (OSError, ValueError):
-                pass
+                pass  # unreadable, or encrypted by another Windows account: log in again
 
     @property
     def ready(self) -> bool:
@@ -70,9 +77,12 @@ class Eero:
         return bool(self.token and self.network_url)
 
     def save(self) -> None:
-        """Persist the session. The token is a login credential -- the file stays local."""
+        """Persist the session. The token is a login credential, so it's stored encrypted
+        with Windows DPAPI: only this Windows account on this PC can read it back."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        blob = base64.b64encode(secret.protect(self.token)).decode("ascii") if self.token else None
         self.path.write_text(json.dumps({
-            "token": self.token, "network_url": self.network_url, "network_name": self.network_name,
+            "token_dpapi": blob, "network_url": self.network_url, "network_name": self.network_name,
         }, indent=2), encoding="utf-8")
 
     def _call(self, method: str, path: str, body: dict | None = None, retry: bool = True):

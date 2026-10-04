@@ -81,6 +81,8 @@
 }
 
 * { box-sizing: border-box; }
+/* `hidden` must win over layout rules like `display: grid` (it hides the sign-in steps). */
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -229,8 +231,13 @@ td .sub { color: var(--muted); font-size: 12px; display: block; overflow-wrap: a
   font: inherit; font-weight: 400; padding: 8px 10px; width: 100%;
   border: 1px solid var(--axis); border-radius: 8px; background: var(--surface); color: var(--ink);
 }
-.email-form label.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; }
-.email-form label.check input { margin-top: 4px; }
+label.check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; font-size: 14px; }
+label.check input { margin-top: 4px; }
+.email-form select { font: inherit; padding: 8px 10px; border: 1px solid var(--axis); border-radius: 8px; background: var(--surface); color: var(--ink); }
+#eero-connect form { margin-top: 12px; }
+#eero-connect-status, #settings-status { font-size: 14px; min-height: 1.5em; margin-top: 8px; }
+#eero-connect-status.error, #settings-status.error { color: var(--critical-ink); }
+#eero-connect-status.ok, #settings-status.ok { color: var(--good-ink); }
 .email-form .hint { font-size: 13px; color: var(--ink-2); }
 .email-advanced { display: grid; gap: 10px; margin-top: 10px; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

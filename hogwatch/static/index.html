@@ -35,7 +35,37 @@
       </div>
     </section>
 
-    <section id="setup" aria-label="Setup"></section>
+    <section id="setup" aria-label="Setup">
+      <div class="alert info" id="eero-connect" hidden>
+        <h3>Connect the eero to see every device</h3>
+        <p id="eero-connect-intro">HogWatch can already see this PC. To see every other device on the network, it
+          needs to read the eero. Your eero account has to be the owner or an admin of the network (the owner can
+          add you in the eero app: <strong>Settings › Network settings › Admins</strong>).</p>
+        <form id="eero-step-login" class="email-form" autocomplete="off" novalidate>
+          <label>Your eero login (email, or phone number with country code, like +15551234567)
+            <input type="text" name="login" autocomplete="username">
+          </label>
+          <div class="actions"><button type="submit" class="btn primary">Send me a code</button></div>
+        </form>
+        <form id="eero-step-code" class="email-form" autocomplete="off" novalidate hidden>
+          <label>The code eero just sent you
+            <input type="text" name="code" inputmode="numeric" autocomplete="one-time-code">
+          </label>
+          <div class="actions">
+            <button type="submit" class="btn primary">Connect</button>
+            <button type="button" class="btn" id="eero-restart">Start again</button>
+          </div>
+        </form>
+        <form id="eero-step-network" class="email-form" novalidate hidden>
+          <label>Which network should HogWatch watch?
+            <select name="url"></select>
+          </label>
+          <div class="actions"><button type="submit" class="btn primary">Use this network</button></div>
+        </form>
+        <p id="eero-connect-status" role="status" aria-live="polite"></p>
+      </div>
+      <div id="setup-hints"></div>
+    </section>
 
     <section aria-labelledby="hist-title" class="history">
       <div class="filter-row">
@@ -147,6 +177,17 @@
         <a href="/installer-report?days=14" target="_blank" rel="noopener">Last 14 days</a>
       </div>
       <p class="hint">In the report, click "Notes from the homeowner" to add anything you know, then use "Print or save as PDF".</p>
+    </section>
+
+    <section class="card" aria-labelledby="settings-title">
+      <h2 id="settings-title">HogWatch settings</h2>
+      <label class="check"><input type="checkbox" id="autostart">
+        <span>Start HogWatch automatically when I sign in to Windows (recommended, so it's always watching)</span></label>
+      <div class="actions" style="margin-top:12px">
+        <button type="button" class="btn" id="stop-btn">Stop HogWatch</button>
+        <span class="hint" id="version"></span>
+      </div>
+      <p id="settings-status" role="status" aria-live="polite"></p>
     </section>
 
     <section class="card help" aria-labelledby="help-title">

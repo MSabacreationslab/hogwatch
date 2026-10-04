@@ -210,8 +210,14 @@ class NetworkEventTrace:
 
     SESSION_NAME = "HogWatch-KernelNetwork"
 
-    def __init__(self):
-        """Prepare (but don't start) the trace session."""
+    def __init__(self, session_name: str | None = None):
+        """Prepare (but don't start) the trace session.
+
+        Starting a session takes over any existing one with the same name, so a second
+        HogWatch on another port needs its own name or it would cut off the first.
+        """
+        if session_name:
+            self.SESSION_NAME = session_name
         self._acc: dict[tuple, int] = {}
         self._lock = threading.Lock()
         self._session = c_uint64(0)

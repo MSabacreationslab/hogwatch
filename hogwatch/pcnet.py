@@ -164,8 +164,8 @@ def primary_interface() -> str | None:
 class PCMonitor:
     """Samples the network card and (optionally) the ETW per-program feed."""
 
-    def __init__(self):
-        """Pick the network card and try to start per-program tracing."""
+    def __init__(self, session_name: str | None = None):
+        """Pick the network card and try to start per-program tracing (`session_name`: see etw.py)."""
         self.nic = primary_interface()
         self._last_nic = self._nic_counters()
         self._last_t = time.time()
@@ -176,7 +176,7 @@ class PCMonitor:
         self.trace_error: str | None = None
         self._naming = threading.Event()
         try:
-            t = NetworkEventTrace()
+            t = NetworkEventTrace(session_name)
             t.start()
             self.trace = t
             threading.Thread(target=self._name_new_pids, name="namer", daemon=True).start()

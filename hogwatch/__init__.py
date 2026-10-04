@@ -11,4 +11,4 @@ Pieces:
   web.py        serves the local dashboard at http://127.0.0.1:8765
 """
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"

@@ -1,17 +1,50 @@
-"""Settings, stored as plain JSON in data/config.json so they can be hand-edited.
+"""Settings, stored as plain JSON in the data folder's config.json so they can be hand-edited.
 
 The file is created with defaults on first run. Unknown keys are ignored and
 missing keys fall back to the defaults, so old config files keep working.
+
+Where the data folder is:
+  - running from source: `data\\` next to the code
+  - the packaged HogWatch.exe: `%LOCALAPPDATA%\\HogWatch` (an exe has no folder of its
+    own to write to; when packed into one file its code lives in a temp folder)
+  - either can be overridden with `--data-dir` or the HOGWATCH_DATA_DIR variable
 """
 
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
+
+def _cli_option(name: str) -> str | None:
+    """Read `--name value` straight from the command line.
+
+    Needed before argparse runs: the data folder decides where config itself lives,
+    and modules capture DATA_DIR when they're imported.
+    """
+    if name in sys.argv:
+        i = sys.argv.index(name)
+        if i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+    return None
+
+
+FROZEN = bool(getattr(sys, "frozen", False))  # True inside the packaged HogWatch.exe
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = ROOT / "data"
+
+
+def _default_data_dir() -> Path:
+    if FROZEN:
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "HogWatch"
+    return ROOT / "data"
+
+
+DATA_DIR = Path(_cli_option("--data-dir") or os.environ.get("HOGWATCH_DATA_DIR") or _default_data_dir())
 CONFIG_PATH = DATA_DIR / "config.json"
+# Lets a second copy run beside the first (for testing) without editing its config.
+PORT_OVERRIDE = _cli_option("--port") or os.environ.get("HOGWATCH_PORT")
 
 DEFAULTS: dict = {
     # Dashboard port. Only bound to 127.0.0.1, so nobody else on the network can see it.
@@ -45,14 +78,15 @@ DEFAULTS: dict = {
 def load() -> dict:
     """Return the merged config (defaults + data/config.json), creating the file if missing."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    merged = dict(DEFAULTS)
     if not CONFIG_PATH.exists():
         CONFIG_PATH.write_text(json.dumps(DEFAULTS, indent=2) + "\n", encoding="utf-8")
-        return dict(DEFAULTS)
-    try:
-        user = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        # A typo in the file shouldn't stop monitoring; run on defaults instead.
-        return dict(DEFAULTS)
-    merged = dict(DEFAULTS)
-    merged.update({k: v for k, v in user.items() if k in DEFAULTS})
+    else:
+        try:
+            user = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            merged.update({k: v for k, v in user.items() if k in DEFAULTS})
+        except (OSError, ValueError):
+            pass  # a typo in the file shouldn't stop monitoring; run on defaults instead
+    if PORT_OVERRIDE:
+        merged["port"] = int(PORT_OVERRIDE)
     return merged

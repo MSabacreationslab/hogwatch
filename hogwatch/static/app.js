@@ -109,7 +109,7 @@ function renderNow() {
   if (state.offline || !n) {
     st.append(badge("muted", "–"), h("div", { class: "status-text" },
       h("div", { class: "status-line" }, "HogWatch isn't running"),
-      h("p", { class: "status-meta" }, "Start it with start-hogwatch.cmd in the hogwatch folder, then reload this page.")));
+      h("p", { class: "status-meta" }, "Start HogWatch again (double-click it), then reload this page.")));
     return;
   }
   const lat = n.latency || {};
@@ -197,7 +197,7 @@ function renderNowDevices(n) {
     return;
   }
   if (e.status === "login_needed") {
-    box.append(h("p", { class: "empty" }, "The eero login expired. Double-click eero-login.cmd to sign in again."));
+    box.append(h("p", { class: "empty" }, "The eero sign-in expired. Sign in again under “Connect the eero” below."));
     return;
   }
   if (e.status === "error") box.append(h("p", { class: "empty" }, "Can't reach the eero cloud right now: " + (e.message || "")));
@@ -205,7 +205,7 @@ function renderNowDevices(n) {
   if (!devs.length) { box.append(h("p", { class: "empty" }, "No devices reported yet.")); return; }
   if (!e.usage_reported) {
     box.append(h("p", { class: "empty" }, `The eero lists ${devs.length} connected devices but isn't reporting their speeds. ` +
-      "Run eero-check.cmd for details."));
+      "That usually clears up within a few minutes."));
     return;
   }
   const active = devs.filter((d) => (d.down_mbps || 0) + (d.up_mbps || 0) >= 0.05).slice(0, 10);
@@ -230,7 +230,7 @@ function renderNowApps(pc) {
   $("pc-sub").textContent = `Last 10 seconds · this PC in total: ↓ ${fmtRate(pc.down_mbps)} / ↑ ${fmtRate(pc.up_mbps)} Mbps`;
   if (!pc.per_app) {
     box.append(h("p", { class: "empty" },
-      "Per-program detail needs administrator rights. Start HogWatch with start-hogwatch.cmd and click Yes on the Windows prompt."));
+      "Per-program detail needs administrator rights. " + NEEDS_ADMIN));
     return;
   }
   const apps = (pc.apps || []).filter((a) => a.down_mbps + a.up_mbps >= 0.01);
@@ -239,28 +239,75 @@ function renderNowApps(pc) {
   box.append(barLegend(), rateBars(apps.map((a) => ({ name: a.app, down: a.down_mbps, up: a.up_mbps })), scale));
 }
 
+const NEEDS_ADMIN = "Stop HogWatch (the button at the bottom of this page), start it again, and click Yes on the Windows prompt.";
+
 function renderSetup(n) {
-  const box = $("setup");
-  box.replaceChildren();
+  /* The eero sign-in form lives in the page (index.html) and is only shown or hidden here:
+     this runs every few seconds, and rebuilding the form would wipe what's being typed. */
   const e = n.eero || {};
-  if (e.status === "not_connected" || e.status === "login_needed") {
-    box.append(h("div", { class: "alert info" },
-      h("h3", {}, "Connect the eero to see every device"),
-      h("p", {}, "HogWatch can already see this PC. To see your roommates' devices and the DirecTV boxes, it needs to read the eero:"),
-      h("ol", { class: "steps" },
-        h("li", {}, "Ask the eero owner to add you as an admin: in the eero app, ", h("strong", {}, "Settings › Network settings › Admins › Add an admin"), "."),
-        h("li", {}, "Accept the invite in your own eero app."),
-        h("li", {}, "In the hogwatch folder, double-click ", h("code", {}, "eero-login.cmd"),
-          " and enter your eero email or phone number, then the code eero sends you."),
-        h("li", {}, "That's it. This page picks it up within 15 seconds, with no restart."))));
-  }
+  $("eero-connect").hidden = !(e.status === "not_connected" || e.status === "login_needed");
+  if (e.status === "login_needed") $("eero-connect-intro").textContent = "The eero sign-in has expired. Sign in again:";
+  const hints = $("setup-hints");
+  hints.replaceChildren();
   if (n.pc && !n.pc.per_app) {
-    box.append(h("div", { class: "alert info" },
+    hints.append(h("div", { class: "alert info" },
       h("h3", {}, "See which program on this PC is using the internet"),
-      h("p", {}, "Windows only shares per-program network data with administrator tools. Close this HogWatch window, then start it with ",
-        h("code", {}, "start-hogwatch.cmd"), " and click Yes on the Windows prompt.")));
+      h("p", {}, "Windows only shares per-program network data with administrator tools. " + NEEDS_ADMIN)));
   }
 }
+
+/* ---- eero sign-in: login -> code -> (pick a network). The token never comes back to the page. */
+
+function eeroStep(step, message, kind) {
+  for (const s of ["login", "code", "network"]) $("eero-step-" + s).hidden = s !== step;
+  const el = $("eero-connect-status");
+  el.textContent = message || "";
+  el.className = kind || "";
+}
+
+async function eeroSubmit(form, path, body) {
+  const btn = form.querySelector("button[type=submit]");
+  btn.disabled = true;
+  try {
+    const res = await postJSON(path, body);
+    if (!res.ok) { $("eero-connect-status").textContent = res.data.error || "That didn't work. Try again."; $("eero-connect-status").className = "error"; return null; }
+    return res.data;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function eeroConnected(name) {
+  eeroStep("login", `Connected to “${name}”. Devices will appear here within about 15 seconds.`, "ok");
+  $("eero-step-login").hidden = true;
+}
+
+$("eero-step-login").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  if (await eeroSubmit(form, "/api/eero/login", { login: form.elements.login.value })) {
+    eeroStep("code", "eero has sent a code to your email or phone.", "");
+    $("eero-step-code").elements.code.focus();
+  }
+});
+$("eero-step-code").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  const data = await eeroSubmit(form, "/api/eero/verify", { code: form.elements.code.value });
+  if (!data) return;
+  form.elements.code.value = "";
+  if (data.connected) return eeroConnected(data.connected);
+  const select = $("eero-step-network").elements.url;
+  select.replaceChildren(...data.networks.map((n) => h("option", { value: n.url }, n.name)));
+  eeroStep("network", "Your account can manage more than one network.", "");
+});
+$("eero-step-network").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const form = ev.currentTarget;
+  const data = await eeroSubmit(form, "/api/eero/network", { url: form.elements.url.value });
+  if (data) eeroConnected(data.connected);
+});
+$("eero-restart").addEventListener("click", () => eeroStep("login", "", ""));
 
 /* ------------------------------------------------------------------ lag spikes */
 
@@ -686,7 +733,7 @@ function renderTables() {
   const pcTot = u.pc_total || {};
   if (!u.apps.length) {
     apps.append(h("p", { class: "empty" }, state.now && state.now.pc && !state.now.pc.per_app
-      ? "Per-program detail needs HogWatch to run as administrator (start-hogwatch.cmd)."
+      ? "Per-program detail needs HogWatch to run as administrator. " + NEEDS_ADMIN
       : "No program data for this period yet."));
   } else {
     apps.append(h("div", { class: "table-wrap" }, h("table", {},
@@ -792,6 +839,43 @@ $("email-send").addEventListener("click", async () => {
   }
 });
 
+/* ------------------------------------------------------------------ settings */
+
+function settingsStatus(text, kind) {
+  const el = $("settings-status");
+  el.textContent = text || "";
+  el.className = kind || "";
+}
+
+async function loadSettings() {
+  let st;
+  try { st = await getJSON("/api/settings"); } catch (e) { return; }
+  $("autostart").checked = !!st.autostart;
+  $("version").textContent = `Version ${st.version} · ` +
+    (st.admin ? "running as administrator" : "not running as administrator, so per-program detail is off");
+}
+
+$("autostart").addEventListener("change", async (ev) => {
+  const box = ev.currentTarget;
+  box.disabled = true;
+  const res = await postJSON("/api/autostart", { enabled: box.checked });
+  box.disabled = false;
+  if (res.ok) {
+    box.checked = !!res.data.autostart;
+    settingsStatus(box.checked ? "HogWatch will start by itself every time you sign in to Windows."
+      : "HogWatch will no longer start by itself.", "ok");
+  } else {
+    box.checked = !box.checked; // put it back: nothing changed
+    settingsStatus(res.data.error || "Couldn't change that.", "error");
+  }
+});
+
+$("stop-btn").addEventListener("click", async () => {
+  const res = await postJSON("/api/shutdown");
+  settingsStatus(res.ok ? "HogWatch has stopped. Double-click HogWatch to start it again." : "Couldn't stop HogWatch.",
+    res.ok ? "" : "error");
+});
+
 /* ------------------------------------------------------------------ wiring */
 
 function setRange(hours) {
@@ -819,5 +903,6 @@ window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer
 setRange(state.hours);
 refreshNow();
 loadEmail();
+loadSettings();
 setInterval(refreshNow, 3000);
 setInterval(refreshHistory, 30000);
