@@ -1,0 +1,71 @@
+# Pushing a version tag (v1.2.0) builds HogWatch.exe on a clean GitHub machine, tests
+# it, and publishes it as a release download. The exe people download is therefore
+# built from the public source at that tag, not on anyone's own PC.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write  # to create the release
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-build.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+
+      - name: The tag must match the app's version
+        shell: pwsh
+        run: |
+          $version = python -c "import hogwatch; print(hogwatch.__version__)"
+          if ("v$version" -ne $env:TAG) { throw "Tag $env:TAG does not match hogwatch.__version__ ($version)" }
+
+      - name: Tests
+        run: python -m unittest discover -s tests
+
+      - name: Build HogWatch.exe
+        run: cmd /c build-exe.cmd
+
+      - name: Run the exe
+        shell: pwsh
+        run: ./scripts/smoke_test_exe.ps1
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/HogWatch.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  HogWatch.exe" | Out-File dist/HogWatch.exe.sha256 -Encoding ascii
+          "SHA256=$hash" >> $env:GITHUB_ENV
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          ## Install
+
+          1. Download **HogWatch.exe** below and put it somewhere it can stay (for example a HogWatch folder in Documents).
+          2. Double-click it. Windows will warn that it's from an unknown publisher, because the exe isn't code-signed: click **More info**, then **Run anyway**.
+          3. Click **Yes** on the admin prompt (needed to see which program on the PC is using the internet). The dashboard opens in your browser.
+          4. On the dashboard, sign in under **Connect the eero**, and tick **Start HogWatch automatically** under HogWatch settings.
+
+          Your history and settings are stored on your own PC in ``%LOCALAPPDATA%\HogWatch``. Nothing is sent anywhere except the eero sign-in (to eero) and the daily email, if you set one up.
+
+          SHA-256 of HogWatch.exe: ``$env:SHA256``
+          "@
+          gh release create $env:TAG dist/HogWatch.exe dist/HogWatch.exe.sha256 --title "HogWatch $env:TAG" --notes $notes --generate-notes
