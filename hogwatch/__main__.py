@@ -1,35 +1,35 @@
 """Command line:
 
-    python -m hogwatch run [--no-browser]   start monitoring + dashboard (default)
-    python -m hogwatch eero-login           connect to the eero (one time)
+    python -m hogwatch run [--no-browser]   start monitoring + dashboard (default from source)
+    python -m hogwatch launch               what double-clicking HogWatch.exe does: ask for admin
+                                            rights, start in the background, open the dashboard
+    python -m hogwatch stop                 stop a running HogWatch
+    python -m hogwatch eero-login           connect to the eero (one time; also on the dashboard)
     python -m hogwatch eero-check           show what the eero reports right now
     python -m hogwatch selftest             15-second check that everything works
     python -m hogwatch send-report          email the last 24 hours now (--preview: save it as HTML instead)
-    python -m hogwatch installer-report     technical report for the eero installer (HTML + PDF in data\\)
+    python -m hogwatch installer-report     technical report for the eero installer (HTML + PDF in the data folder)
+
+Options before the command: --data-dir FOLDER, --port N (see config.py).
 """
 
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import logging
 import logging.handlers
+import subprocess
 import sys
 import threading
 import time
-import webbrowser
+import urllib.request
+from pathlib import Path
 
 from . import config, ping
-from .config import DATA_DIR
-
-
-def _is_admin() -> bool:
-    """True when running elevated (needed for the per-program breakdown)."""
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except OSError:
-        return False
+from .config import DATA_DIR, FROZEN, ROOT
+from .winutil import is_admin as _is_admin
+from .winutil import open_dashboard, run_elevated, server_up
 
 
 def _setup_logging() -> None:
@@ -59,11 +59,12 @@ def cmd_run(args) -> int:
     db_ref: dict = {}
     reporter_ref: dict = {}
     try:
-        server = make_server(cfg["port"], collector_ref, db_ref, on_shutdown=done.set, reporter_ref=reporter_ref)
+        server = make_server(cfg["port"], collector_ref, db_ref, on_shutdown=done.set, reporter_ref=reporter_ref,
+                             eero_session=DATA_DIR / "eero_session.json")
     except OSError:
         log.info("HogWatch is already running -- opening the dashboard")
         if not args.no_browser:
-            webbrowser.open(url)
+            open_dashboard(url)
         return 0
 
     db = DB(DATA_DIR / "hogwatch.db")
@@ -79,7 +80,7 @@ def cmd_run(args) -> int:
     reporter_ref["r"] = reporter
     threading.Thread(target=reporter.loop, name="report", daemon=True).start()
     if not args.no_browser:
-        webbrowser.open(url)
+        open_dashboard(url)
     try:
         while not done.wait(1):
             pass
@@ -88,6 +89,61 @@ def cmd_run(args) -> int:
     log.info("stopping")
     collector.stop()
     server.shutdown()
+    return 0
+
+
+def _global_options() -> list[str]:
+    """--data-dir / --port as given on this command line, to pass on to a relaunched copy."""
+    out = []
+    for name in ("--data-dir", "--port"):
+        if name in sys.argv and sys.argv.index(name) + 1 < len(sys.argv):
+            out += [name, sys.argv[sys.argv.index(name) + 1]]
+    return out
+
+
+def cmd_launch(args) -> int:
+    """Double-click behaviour: make sure HogWatch is running in the background (as admin if
+    the user allows it), open the dashboard, and exit.
+
+    The background copy is started as administrator because Windows only shares
+    per-program network data with admin tools. This copy stays un-elevated so the
+    browser it opens isn't running as administrator.
+    """
+    cfg = config.load()
+    port = int(cfg["port"])
+    url = f"http://127.0.0.1:{port}/"
+    if server_up(port):
+        open_dashboard(url)
+        return 0
+    if not _is_admin():
+        params = _global_options() + ["run", "--no-browser"]
+        if FROZEN:
+            exe, argv, cwd = sys.executable, params, str(Path(sys.executable).parent)
+        else:
+            pyw = Path(sys.executable).with_name("pythonw.exe")
+            exe, argv, cwd = str(pyw if pyw.exists() else sys.executable), ["-m", "hogwatch", *params], str(ROOT)
+        if run_elevated(exe, subprocess.list2cmdline(argv), cwd):
+            for _ in range(60):  # the packaged exe unpacks itself first; allow it 30 seconds
+                if server_up(port, timeout=0.5):
+                    break
+                time.sleep(0.5)
+            open_dashboard(url)
+            return 0
+        # The user said No to the admin prompt: run here without per-program detail.
+    args.no_browser = False
+    return cmd_run(args)
+
+
+def cmd_stop(args) -> int:
+    """Ask a running HogWatch to shut down cleanly."""
+    port = int(config.load()["port"])
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/shutdown", data=b"{}", method="POST",
+                                 headers={"X-HogWatch": "1", "Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=5).close()
+        print("HogWatch stopped.")
+    except OSError:
+        print("HogWatch wasn't running.")
     return 0
 
 
@@ -245,9 +301,14 @@ def cmd_installer_report(args) -> int:
 def main() -> int:
     """Parse the command and run it."""
     p = argparse.ArgumentParser(prog="hogwatch", description="Find out who is slowing the internet down.")
+    # Read early by config.py (they decide where config lives); declared here so argparse accepts them.
+    p.add_argument("--data-dir", help="folder for history, settings and logs")
+    p.add_argument("--port", type=int, help="dashboard port (default 8765)")
     sub = p.add_subparsers(dest="cmd")
     r = sub.add_parser("run", help="start monitoring and the dashboard")
     r.add_argument("--no-browser", action="store_true", help="don't open the dashboard")
+    sub.add_parser("launch", help="start in the background as administrator and open the dashboard")
+    sub.add_parser("stop", help="stop a running HogWatch")
     sub.add_parser("eero-login", help="connect to the eero (one time)")
     sub.add_parser("eero-check", help="show what the eero reports right now")
     st = sub.add_parser("selftest", help="15-second check that everything works")
@@ -260,10 +321,13 @@ def main() -> int:
     ir.add_argument("--note", help="notes from the homeowner to include")
     args = p.parse_args()
     if args.cmd is None:
-        args = p.parse_args(["run"])
+        # Double-clicking the exe gives no command: do the friendly thing. From source,
+        # plain `python -m hogwatch` keeps its original meaning (run in this window).
+        args.cmd = "launch" if FROZEN else "run"
+        args.no_browser = False
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return {"run": cmd_run, "eero-login": cmd_eero_login, "eero-check": cmd_eero_check,
-            "selftest": cmd_selftest, "send-report": cmd_send_report,
+    return {"run": cmd_run, "launch": cmd_launch, "stop": cmd_stop, "eero-login": cmd_eero_login,
+            "eero-check": cmd_eero_check, "selftest": cmd_selftest, "send-report": cmd_send_report,
             "installer-report": cmd_installer_report}[args.cmd](args)
 
 

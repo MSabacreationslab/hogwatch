@@ -14,9 +14,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__, autostart
+from .config import FROZEN
 from .db import HICCUP_END
+from .eero import Eero, EeroError
 from .installer import build_installer_report
 from .report import ReportError, build_report
+from .winutil import is_admin
 
 log = logging.getLogger(__name__)
 
@@ -150,9 +154,14 @@ def incidents(db, days: float, limit: int) -> list[dict]:
 
 
 def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown,
-                reporter_ref: dict | None = None) -> ThreadingHTTPServer:
-    """Create (bind) the server. Binding first doubles as the 'already running?' check."""
+                reporter_ref: dict | None = None, eero_session: Path | None = None) -> ThreadingHTTPServer:
+    """Create (bind) the server. Binding first doubles as the 'already running?' check.
+
+    `eero_session` is where the eero login is saved; with it, the dashboard can do the
+    eero sign-in itself (the packaged exe has no terminal to do it in).
+    """
     reporter_ref = reporter_ref if reporter_ref is not None else {}
+    eero_login: dict = {}  # the sign-in in progress: {"client": Eero, "networks": [...]}
     # Only answer requests addressed to this machine by name. A web page elsewhere can
     # point its own domain at 127.0.0.1 ("DNS rebinding") and then read this dashboard
     # as if it were its own site; checking the Host header stops that. It matters more
@@ -189,6 +198,9 @@ def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown,
             q = {k: v[0] for k, v in parse_qs(url.query).items()}
             col, db, rep = collector_ref.get("c"), db_ref.get("db"), reporter_ref.get("r")
             try:
+                if url.path == "/api/settings":
+                    return self._json({"version": __version__, "packaged": FROZEN, "admin": is_admin(),
+                                       "autostart": autostart.installed()})
                 if url.path == "/api/email":
                     # Settings never include the password itself, only whether one is saved.
                     return self._json({"settings": rep.settings.load(), "status": rep.status()} if rep
@@ -231,6 +243,16 @@ def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown,
                 self._json({"ok": True})
                 threading.Thread(target=on_shutdown, daemon=True).start()
                 return
+            try:
+                if path == "/api/autostart":
+                    (autostart.install if self._body().get("enabled") else autostart.uninstall)()
+                    return self._json({"ok": True, "autostart": autostart.installed()})
+                if path.startswith("/api/eero/") and eero_session is not None:
+                    return self._json(self._eero_sign_in(path, self._body()))
+            except (autostart.AutostartError, EeroError) as e:
+                return self._json({"ok": False, "error": str(e)}, 400)
+            except ValueError as e:
+                return self._json({"ok": False, "error": f"Bad request: {e}"}, 400)
             rep = reporter_ref.get("r")
             if rep is None:
                 return self._json({"ok": False, "error": "HogWatch is still starting"}, 503)
@@ -248,6 +270,52 @@ def make_server(port: int, collector_ref: dict, db_ref: dict, on_shutdown,
             except ValueError as e:
                 return self._json({"ok": False, "error": f"Bad request: {e}"}, 400)
             self._send(404, b"not found", "text/plain")
+
+        def _eero_sign_in(self, path: str, body: dict) -> dict:
+            """The eero sign-in, step by step: login -> emailed/texted code -> (pick a network).
+
+            Nothing is saved until a network is chosen, so a half-finished sign-in never
+            replaces a working one. The collector notices the saved file and starts using it.
+            """
+            if path == "/api/eero/login":
+                login = str(body.get("login") or "").strip()
+                if not login:
+                    raise EeroError("Enter the email or phone number of your eero account.")
+                client = Eero(eero_session)
+                try:
+                    client.start_login(login)
+                except EeroError as e:
+                    raise EeroError("eero didn't recognise that login. Use your eero account's email, or its phone "
+                                    f"number with the country code (like +15551234567). ({e})") from e
+                eero_login.clear()
+                eero_login["client"] = client
+                return {"ok": True}
+            client = eero_login.get("client")
+            if client is None:
+                raise EeroError("Start again: enter your eero login first.")
+            if path == "/api/eero/verify":
+                try:
+                    client.verify(str(body.get("code") or ""))
+                    nets = client.networks()
+                except EeroError as e:
+                    raise EeroError(f"That code didn't work. Check it, or start again to get a new one. ({e})") from e
+                if not nets:
+                    raise EeroError("You're signed in, but this eero account isn't an admin on any network yet. "
+                                    "Ask the owner to add you as an admin in the eero app, then sign in again.")
+                eero_login["networks"] = nets
+                if len(nets) > 1:
+                    return {"ok": True, "networks": [{"name": n["name"], "url": n["url"]} for n in nets]}
+                chosen = nets[0]
+            elif path == "/api/eero/network":
+                chosen = next((n for n in eero_login.get("networks", []) if n["url"] == body.get("url")), None)
+                if chosen is None:
+                    raise EeroError("Pick one of the listed networks.")
+            else:
+                raise EeroError("Unknown sign-in step.")
+            client.network_url, client.network_name = chosen["url"], chosen["name"]
+            client.save()
+            eero_login.clear()
+            return {"ok": True, "connected": chosen["name"]}
 
         def log_message(self, fmt, *args):
             """Silence per-request logging; the dashboard polls every few seconds."""

@@ -12,6 +12,31 @@ they're probably doing**, and shows it on a dashboard at <http://127.0.0.1:8765/
 
 <sub>Screenshot uses demo data; device names and rooms are made up.</sub>
 
+## Download (Windows)
+
+**[Download HogWatch.exe](https://github.com/MSabacreationslab/hogwatch/releases/latest/download/HogWatch.exe)**
+from the [latest release](https://github.com/MSabacreationslab/hogwatch/releases/latest). It needs nothing else installed.
+
+1. Put the exe somewhere it can stay, such as a `HogWatch` folder in Documents.
+2. Double-click it. Windows warns that it's from an unknown publisher, because the exe isn't
+   code-signed: click **More info**, then **Run anyway**.
+3. Click **Yes** on the admin prompt. HogWatch needs it to see which program on the PC is using
+   the internet. The dashboard then opens in your browser.
+4. On the dashboard, sign in under **Connect the eero** (your eero account's email or phone, then
+   the code eero sends you), and tick **Start HogWatch automatically** under *HogWatch settings*.
+
+Good to know:
+
+- Each release's exe is built by GitHub from the public source at that version, and the release
+  page lists its SHA-256 checksum.
+- History and settings stay on your PC in `%LOCALAPPDATA%\HogWatch`. Logins (eero, email) are
+  stored encrypted so only your Windows account can read them.
+- Double-clicking the exe again just opens the dashboard. **Stop HogWatch** is at the bottom of it.
+- To remove it: untick *Start automatically*, click *Stop HogWatch*, then delete the exe and
+  the `%LOCALAPPDATA%\HogWatch` folder.
+
+The rest of this page covers running from source and how it works.
+
 It watches three things at once:
 
 | What | How | Needs |
@@ -29,7 +54,9 @@ a **slowdown**. It also writes a plain-English explanation, for example:
 It only names someone when they were actually using a big share of the line. If
 nobody was, it says so and points at AT&T or the eero instead.
 
-## Everyday use
+## Everyday use (running from source)
+
+Run `setup.cmd` once after cloning. `build-exe.cmd` builds `dist\HogWatch.exe` yourself.
 
 | Double-click | To |
 |---|---|

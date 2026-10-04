@@ -2,3 +2,7 @@
 __pycache__/
 # History, logs, and the eero login token live here -- never commit it.
 data/
+# PyInstaller output (build-exe.cmd). Releases are built by the release workflow.
+build/
+dist/
+*.spec

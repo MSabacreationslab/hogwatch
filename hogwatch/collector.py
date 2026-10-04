@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 import psutil
 
 from . import ping
-from .config import DATA_DIR
+from .config import DATA_DIR, DEFAULTS
 from .db import DB
 from .eero import Eero, EeroError, LoginNeeded, parse_device, parse_unit, speed_from_network, uplink_chain
 from .incidents import Detector, HiccupTracker, Incident, where_text
@@ -83,7 +83,9 @@ class Collector:
         if not self.db.get_meta("link_watch_since"):
             # Reports may only claim "the PC's cable never dropped" for the time it was watched.
             self.db.set_meta("link_watch_since", str(int(time.time())))
-        self.pc = PCMonitor()
+        # A copy on a non-default port gets its own trace session, so it can't cut off the main one.
+        port = int(self.cfg["port"])
+        self.pc = PCMonitor(None if port == DEFAULTS["port"] else f"HogWatch-KernelNetwork-{port}")
         for fn in (self._ping_loop, self._pc_loop, self._eero_loop, self._housekeeping_loop):
             threading.Thread(target=self._guard(fn), name=fn.__name__.strip("_"), daemon=True).start()
 
